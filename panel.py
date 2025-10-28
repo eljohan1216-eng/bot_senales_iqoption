@@ -67,9 +67,22 @@ def index():
         senales=senales
     )
 
-# -------- EJECUCIÓN --------
+# ----------------------------
+# 🔥 EJECUCIÓN FINAL DEL BOT + SERVIDOR FLASK
+# ----------------------------
+import os
+import threading
+
 if __name__ == "__main__":
     print("✅ Conectado correctamente a IQ Option (REAL)")
     print(f"🚀 Iniciando bot en modo mixto ({MODO_ACTUAL})...")
+
+    # 🔁 Inicia el hilo del generador de señales
     threading.Thread(target=generar_senales, daemon=True).start()
-    app.run(host="127.0.0.1", port=8765)
+
+    # 🌍 Configuración dinámica para Render y local
+    port = int(os.environ.get("PORT", 8765))  # Render asigna automáticamente este puerto
+    host = "0.0.0.0" if "RENDER" in os.environ else "127.0.0.1"
+
+    print(f"🌐 Servidor Flask ejecutándose en http://{host}:{port}")
+    app.run(host=host, port=port)
