@@ -55,14 +55,15 @@ def generar_senales():
             senales.pop()
 
         print(f"📈 Señal generada: {nueva_senal}")
-        time.sleep(10)  # cada 10 segundos genera una nueva
+        time.sleep(10)
 
 # ------------------------------
 # 🌐 RUTAS DEL PANEL WEB
 # ------------------------------
 @app.route("/")
 def index():
-    return render_template("panel.html", senales=senales, bot_activo=bot_activo, modo=MODO_ACTUAL)
+    hora_local = time.strftime("%H:%M:%S")
+    return render_template("panel.html", senales=senales, bot_activo=bot_activo, modo=MODO_ACTUAL, hora=hora_local)
 
 @app.route("/api/senales")
 def api_senales():
