@@ -1,98 +1,113 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Panel de Señales IQ Option</title>
-    <style>
-        body {
-            background-color: #000;
-            color: #00ff00;
-            font-family: Consolas, monospace;
-            text-align: center;
-        }
-        table {
-            width: 95%;
-            margin: 20px auto;
-            border-collapse: collapse;
-        }
-        th, td {
-            border: 1px solid #00ff00;
-            padding: 6px 10px;
-            text-align: center;
-        }
-        th {
-            background-color: #003300;
-        }
-        .CALL {
-            color: #00ff00;
-            font-weight: bold;
-        }
-        .PUT {
-            color: #ff3333;
-            font-weight: bold;
-        }
-        .finalizada {
-            color: #00ccff;
-        }
-        .header {
-            margin: 20px 0;
-        }
-        .boton {
-            background-color: #00ff00;
-            border: none;
-            padding: 8px 16px;
-            color: black;
-            font-weight: bold;
-            cursor: pointer;
-            border-radius: 5px;
-        }
-    </style>
+  <meta charset="utf-8"/>
+  <title>Panel de Señales IQ Option</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body{ background:#0b1e0b; color:#8fff86; font-family:system-ui,Segoe UI,Roboto,Arial; }
+    h1{ color:#7dff75; letter-spacing:1px; }
+    .badge{ display:inline-block; padding:.35rem .6rem; border-radius:.5rem; background:#1e3f1e; border:1px solid #55ff55; }
+    .btn{ background:#2bd92b; color:#042b04; padding:.5rem .9rem; border:none; border-radius:.4rem; cursor:pointer; font-weight:700; }
+    table{ width:100%; border-collapse:collapse; font-size:14px; }
+    th, td{ border:1px solid #2f7a2f; padding:.55rem .6rem; text-align:center; }
+    th{ background:#103410; color:#9cff94; position:sticky; top:0; }
+    tr:hover{ background:#0f2a0f; }
+    .tipo-call{ color:#00ff75; font-weight:700; }
+    .tipo-put{ color:#ff5a5a; font-weight:700; }
+    .estado-curso{ color:#a8ffa3; }
+    .estado-fin{ color:#ffd861; font-weight:700; }
+    .head{ display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+    .grid{ display:grid; grid-template-columns: repeat(2, max-content); gap:10px 20px; align-items:center; }
+  </style>
 </head>
 <body>
-    <h1>📊 Panel de Señales IQ Option</h1>
-    <div class="header">
-        <p><b>Estado del Bot:</b> Conectado ✅</p>
-        <p>Hora local: <span id="hora">{{ hora_local }}</span></p>
-        <p>Modo actual: {{ modo_actual }}</p>
-        <button class="boton">Desactivar Bot</button>
-    </div>
+  <h1>📊 Panel de Señales IQ Option</h1>
 
-    <table>
-        <tr>
-            <th>Par</th>
-            <th>Tipo</th>
-            <th>Precio</th>
-            <th>Entrada</th>
-            <th>Expira</th>
-            <th>Confianza</th>
-            <th>Duración</th>
-            <th>Estrategia</th>
-            <th>Estado</th>
-        </tr>
-        {% for s in senales %}
-        <tr>
-            <td>{{ s.par }}</td>
-            <td class="{{ s.tipo }}">{{ s.tipo }}</td>
-            <td>{{ s.precio }}</td>
-            <td>{{ s.entrada }}</td>
-            <td>{{ s.expira }}</td>
-            <td>{{ s.confianza }}%</td>
-            <td>{{ s.duracion }}</td>
-            <td>{{ s.estrategia }}</td>
-            <td class="{% if 'FINALIZADA' in s.estado %}finalizada{% endif %}">{{ s.estado }}</td>
-        </tr>
-        {% endfor %}
-    </table>
+  <div class="grid" style="margin:10px 0 14px">
+    <div class="badge">Estado del Bot: <span id="estado-bot">—</span></div>
+    <div class="badge">Hora local: <span id="hora-local">—</span></div>
+    <div class="badge">Modo actual: <span id="modo-actual">—</span></div>
+    <button class="btn" id="btn-refresh">Actualizar</button>
+  </div>
 
-    <script>
-        // Actualizar hora en tiempo real cada segundo
-        setInterval(() => {
-            fetch('/hora')
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('hora').textContent = data.hora;
-                });
-        }, 1000);
-    </script>
+  <table id="tabla">
+    <thead>
+      <tr>
+        <th>Par</th>
+        <th>Tipo</th>
+        <th>Precio</th>
+        <th>Entrada</th>
+        <th>Expira</th>
+        <th>Confianza</th>
+        <th>Duración</th>
+        <th>Estrategia</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <!-- filas dinámicas -->
+    </tbody>
+  </table>
+
+<script>
+const $hora = document.getElementById('hora-local');
+const $modo = document.getElementById('modo-actual');
+const $estado = document.getElementById('estado-bot');
+const $tbody = document.getElementById('tbody');
+
+function pintarTipo(tipo){
+  if (tipo === 'CALL') return `<span class="tipo-call">CALL</span>`;
+  return `<span class="tipo-put">PUT</span>`;
+}
+function pintarEstado(est){
+  if (est === 'FINALIZADA') return `<span class="estado-fin">FINALIZADA</span>`;
+  return `<span class="estado-curso">EN CURSO</span>`;
+}
+
+async function tickStatus(){
+  try{
+    const r = await fetch('/api/status');
+    const j = await r.json();
+    $hora.textContent = j.hora_local || '—';
+    $modo.textContent = j.modo || '—';
+    $estado.textContent = (j.bot_activo ? 'Conectado ✅' : 'Detenido ⛔');
+  }catch(e){}
+}
+
+async function cargarTabla(){
+  try{
+    const r = await fetch('/api/signals');
+    const j = await r.json();
+    const filas = (j.signals || []).map(s => `
+      <tr>
+        <td>${s.par}</td>
+        <td>${pintarTipo(s.tipo)}</td>
+        <td>${s.precio}</td>
+        <td>${s.entrada}</td>
+        <td>${s.expira}</td>
+        <td>${s.confianza}</td>
+        <td>${s.duracion}</td>
+        <td>${s.estrategia}</td>
+        <td>${pintarEstado(s.estado)}</td>
+      </tr>
+    `).join('');
+    $tbody.innerHTML = filas;
+  }catch(e){}
+}
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  cargarTabla();
+  tickStatus();
+});
+
+// actualiza sin recargar
+setInterval(tickStatus, 1000);     // hora/mode cada 1s
+setInterval(cargarTabla, 2000);    // señales cada 2s
+
+// primercarga
+tickStatus();
+cargarTabla();
+</script>
 </body>
 </html>

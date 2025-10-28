@@ -1,3 +1,7 @@
 flask
-gunicorn
+iqoptionapi
+websocket-client
 requests
+numpy
+pandas
+pytz

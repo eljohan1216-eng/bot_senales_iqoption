@@ -1,84 +1,204 @@
-# ===============================================================
-# 📊 PANEL DE SEÑALES IQ OPTION – VERSIÓN FINAL (Render + Local)
-# ===============================================================
+# -*- coding: utf-8 -*-
+"""
+Panel de Señales IQ Option – Compatible LOCAL + RENDER
+- Hora local con zona "America/Santiago"
+- Modo actual visible (OTC / REAL / MIXTO)
+- Duración por confianza: 85–90 => 1m, 90–95 => 3m, 95–100 => 5m
+- API /status para hora y modo (polled por el front)
+- API /api/signals para tabla (tu generador la alimenta)
+"""
+
+import os
+import json
+import random
+import threading
+from datetime import datetime, timedelta, timezone
+
+try:
+    # Python 3.9+ trae zoneinfo en la stdlib
+    from zoneinfo import ZoneInfo
+    TZ_CL = ZoneInfo("America/Santiago")
+except Exception:
+    # Fallback (si llegara a faltar zoneinfo en alguna máquina)
+    import pytz
+    TZ_CL = pytz.timezone("America/Santiago")
 
 from flask import Flask, render_template, jsonify
-import threading, time, random, os
 
-app = Flask(__name__)
+# -----------------------------
+# CONFIGURACIÓN
+# -----------------------------
+MODO_ACTUAL = os.environ.get("MODO_ACTUAL", "MIXTO")  # "OTC", "REAL" o "MIXTO"
 
-# ------------------------------
-# 🔧 CONFIGURACIÓN DEL BOT
-# ------------------------------
+# Si Render asigna puerto dinámico lo usamos; si no, local 8765
+PORT = int(os.environ.get("PORT", 8765))
+# Host: en Render debe ser 0.0.0.0; local puede ser 127.0.0.1
+HOST = "0.0.0.0" if "RENDER" in os.environ or os.environ.get("ON_RENDER") else "127.0.0.1"
+
+# Estructura de señales en memoria
+senales = []  # cada item: dict con par, tipo, precio, entrada, expira, confianza, duracion_min, estrategia, estado
+
 bot_activo = True
-MODO_ACTUAL = "MIXTO"
-pares = ["EURUSD", "GBPUSD", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDCAD", "EURGBP-OTC"]
+app = Flask(__name__, template_folder="templates", static_folder="static")
 
-estrategias = [
-    "Acción del Precio + Soporte/Resistencia",
-    "Ruptura de Nivel + Volumen",
-    "Rechazo de Zona Institucional",
+
+# -----------------------------
+# UTILIDADES
+# -----------------------------
+def ahora_cl():
+    """Devuelve datetime timezone-aware en Chile."""
+    # Si TZ_CL es pytz, se usa localize; si es zoneinfo, replace tzinfo
+    try:
+        return datetime.now(TZ_CL)
+    except Exception:
+        return pytz.utc.localize(datetime.utcnow()).astimezone(TZ_CL)  # pragma: no cover
+
+
+def fmt_hhmmss(dt: datetime) -> str:
+    return dt.strftime("%I:%M:%S %p")  # 12h con AM/PM como en tu panel
+
+
+def duracion_por_confianza(conf: int) -> int:
+    """Regla solicitada: 85–90 => 1, 90–95 => 3, 95–100 => 5 (minutos)."""
+    if conf < 90:
+        return 1
+    elif conf < 95:
+        return 3
+    else:
+        return 5
+
+
+# -----------------------------
+# GENERADOR DE SEÑALES (demostración)
+# NOTA: aquí puedes conectar tu lógica real/IQOption. Mantengo un mock estable.
+# -----------------------------
+PARES_REAL = ["EURUSD", "GBPUSD", "USDJPY"]
+PARES_OTC = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC"]
+ESTRATEGIAS = [
     "Pullback + EMA20",
-    "Cambio de Tendencia + Confirmación de Vela"
+    "Ruptura de Nivel + Volumen",
+    "Acción del Precio + Soporte/Resistencia",
+    "Cambio de Tendencia + Confirmación de Vela",
+    "Rechazo de Zona Institucional"
 ]
 
-# ------------------------------
-# 🧠 GENERADOR DE SEÑALES
-# ------------------------------
-senales = []
-
 def generar_senales():
-    global senales
     while bot_activo:
-        par = random.choice(pares)
-        tipo = random.choice(["CALL", "PUT"])
-        precio = round(random.uniform(1.10, 1.35), 6)
-        confianza = random.randint(80, 99)
-        duracion = random.choice([1, 2, 3])
-        estrategia = random.choice(estrategias)
-        hora_actual = time.strftime("%H:%M:%S")
+        try:
+            now = ahora_cl()
+            # Decide universo
+            universo = []
+            if MODO_ACTUAL in ("REAL", "MIXTO"):
+                universo += PARES_REAL
+            if MODO_ACTUAL in ("OTC", "MIXTO"):
+                universo += PARES_OTC
+            if not universo:
+                universo = PARES_OTC
 
-        nueva_senal = {
-            "par": par,
-            "tipo": tipo,
-            "precio": precio,
-            "entrada": hora_actual,
-            "expira": time.strftime("%H:%M:%S", time.localtime(time.time() + duracion * 60)),
-            "confianza": f"{confianza}%",
-            "duracion": f"{duracion} min",
-            "estrategia": estrategia,
-            "estado": "EN CURSO"
-        }
+            par = random.choice(universo)
+            tipo = random.choice(["CALL", "PUT"])
+            precio = round(random.uniform(1.05, 1.35), 6)
+            confianza = random.randint(80, 99)
+            dur_min = duracion_por_confianza(max(85, confianza))  # aseguramos >=85
+            entrada = now + timedelta(seconds=random.randint(30, 90))
+            expira = entrada + timedelta(minutes=dur_min)
+            estrategia = random.choice(ESTRATEGIAS)
 
-        senales.insert(0, nueva_senal)
-        if len(senales) > 10:
-            senales.pop()
+            senales.append({
+                "par": par,
+                "tipo": tipo,
+                "precio": precio,
+                "entrada": entrada.isoformat(),
+                "expira": expira.isoformat(),
+                "confianza": confianza,
+                "duracion_min": dur_min,
+                "estrategia": estrategia,
+                "estado": "EN CURSO"
+            })
 
-        print(f"📈 Señal generada: {nueva_senal}")
-        time.sleep(10)
+            # Mantén la lista razonable
+            if len(senales) > 120:
+                del senales[:40]
 
-# ------------------------------
-# 🌐 RUTAS DEL PANEL WEB
-# ------------------------------
+            # Actualiza estados (Finalizada si ya pasó expira)
+            _actualizar_estados()
+
+        except Exception:
+            pass
+
+        # Ritmo de generación
+        import time
+        time.sleep(3)
+
+
+def _actualizar_estados():
+    """Marca 'FINALIZADA' si ya pasó expira."""
+    now = ahora_cl()
+    for s in senales:
+        try:
+            exp = datetime.fromisoformat(s["expira"])
+            # si exp viene naive, fozamos tz CL
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=TZ_CL)
+            if now >= exp:
+                s["estado"] = "FINALIZADA"
+            else:
+                s["estado"] = "EN CURSO"
+        except Exception:
+            s["estado"] = "EN CURSO"
+
+
+# -----------------------------
+# RUTAS
+# -----------------------------
 @app.route("/")
 def index():
-    hora_local = time.strftime("%H:%M:%S")
-    return render_template("panel.html", senales=senales, bot_activo=bot_activo, modo=MODO_ACTUAL, hora=hora_local)
+    return render_template("panel.html")
 
-@app.route("/api/senales")
-def api_senales():
-    return jsonify(senales)
 
-# ------------------------------
-# ⚙️ EJECUCIÓN DEL SERVIDOR
-# ------------------------------
+@app.route("/api/status")
+def api_status():
+    return jsonify({
+        "hora_local": fmt_hhmmss(ahora_cl()),
+        "modo": MODO_ACTUAL,
+        "bot_activo": bot_activo
+    })
+
+
+@app.route("/api/signals", methods=["GET"])
+def api_signals():
+    _actualizar_estados()
+    # Formateamos campos para la tabla
+    datos = []
+    for s in senales:
+        try:
+            ent = datetime.fromisoformat(s["entrada"])
+            exp = datetime.fromisoformat(s["expira"])
+            if ent.tzinfo is None: ent = ent.replace(tzinfo=TZ_CL)
+            if exp.tzinfo is None: exp = exp.replace(tzinfo=TZ_CL)
+            datos.append({
+                "par": s["par"],
+                "tipo": s["tipo"],
+                "precio": s["precio"],
+                "entrada": ent.strftime("%H:%M:%S"),
+                "expira": exp.strftime("%H:%M:%S"),
+                "confianza": f'{s["confianza"]}%',
+                "duracion": f'{s["duracion_min"]} min',
+                "estrategia": s["estrategia"],
+                "estado": s["estado"]
+            })
+        except Exception:
+            pass
+    return jsonify({"signals": datos})
+
+
+# -----------------------------
+# EJECUCIÓN
+# -----------------------------
 if __name__ == "__main__":
-    print("✅ Conectado correctamente a IQ Option (REAL)")
-    print(f"🚀 Iniciando bot en modo {MODO_ACTUAL}...")
-    threading.Thread(target=generar_senales, daemon=True).start()
+    print("✅ Conectado correctamente a IQ Option (REAL)")  # tu conexión real puede loguearse aquí
+    print(f"🚀 Iniciando bot en modo: {MODO_ACTUAL}")
 
-    # 🔥 CONFIGURACIÓN FINAL DEL SERVIDOR FLASK 🔥
-    port = int(os.environ.get("PORT", 8765))
-    host = "0.0.0.0" if "RENDER" in os.environ else "127.0.0.1"
-    print(f"🌐 Servidor Flask ejecutándose en http://{host}:{port}")
-    app.run(host=host, port=port)
+    threading.Thread(target=generar_senales, daemon=True).start()
+    print(f"🌐 Servidor Flask ejecutándose en http://{HOST}:{PORT}")
+    app.run(host=HOST, port=PORT)
