@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel de Señales IQ Option</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #00ff00;
+            font-family: Consolas, monospace;
+            text-align: center;
+        }
+        table {
+            width: 95%;
+            margin: 20px auto;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #00ff00;
+            padding: 6px 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #003300;
+        }
+        .CALL {
+            color: #00ff00;
+            font-weight: bold;
+        }
+        .PUT {
+            color: #ff3333;
+            font-weight: bold;
+        }
+        .finalizada {
+            color: #00ccff;
+        }
+        .header {
+            margin: 20px 0;
+        }
+        .boton {
+            background-color: #00ff00;
+            border: none;
+            padding: 8px 16px;
+            color: black;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📊 Panel de Señales IQ Option</h1>
+    <div class="header">
+        <p><b>Estado del Bot:</b> Conectado ✅</p>
+        <p>Hora local: <span id="hora">{{ hora_local }}</span></p>
+        <p>Modo actual: {{ modo_actual }}</p>
+        <button class="boton">Desactivar Bot</button>
+    </div>
+
+    <table>
+        <tr>
+            <th>Par</th>
+            <th>Tipo</th>
+            <th>Precio</th>
+            <th>Entrada</th>
+            <th>Expira</th>
+            <th>Confianza</th>
+            <th>Duración</th>
+            <th>Estrategia</th>
+            <th>Estado</th>
+        </tr>
+        {% for s in senales %}
+        <tr>
+            <td>{{ s.par }}</td>
+            <td class="{{ s.tipo }}">{{ s.tipo }}</td>
+            <td>{{ s.precio }}</td>
+            <td>{{ s.entrada }}</td>
+            <td>{{ s.expira }}</td>
+            <td>{{ s.confianza }}%</td>
+            <td>{{ s.duracion }}</td>
+            <td>{{ s.estrategia }}</td>
+            <td class="{% if 'FINALIZADA' in s.estado %}finalizada{% endif %}">{{ s.estado }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <script>
+        // Actualizar hora en tiempo real cada segundo
+        setInterval(() => {
+            fetch('/hora')
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('hora').textContent = data.hora;
+                });
+        }, 1000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,199 @@
+# ==============================================================
+# Panel de Señales IQ Option (Flask) - Profesional con contador
+# ==============================================================
+
+from flask import Flask, render_template_string, jsonify
+from datetime import datetime
+import json, os, time
+
+app = Flask(__name__)
+
+# Archivo donde el bot guarda las señales
+RUTA_SENIALES = "signals.json"
+
+# ------------------------ Utilidades --------------------------
+
+def leer_senales():
+    """Lee el JSON de señales y devuelve una lista (vacía si no existe)."""
+    if not os.path.exists(RUTA_SENIALES):
+        return []
+    try:
+        with open(RUTA_SENIALES, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+            return []
+    except Exception:
+        return []
+
+def parse_hora(hhmmss: str) -> datetime:
+    """Convierte 'HH:MM:SS' de hoy a datetime."""
+    hoy = datetime.now().date().strftime("%Y-%m-%d")
+    return datetime.strptime(f"{hoy} {hhmmss}", "%Y-%m-%d %H:%M:%S")
+
+def estado_y_contador(entrada_str: str, expira_str: str):
+    """
+    Calcula el estado y el contador (segundos restantes).
+    - PRE-ALERTA: faltan segundos para 'entrada'
+    - EN CURSO : entre 'entrada' y 'expira'
+    - FINALIZADA: ya pasó 'expira'
+    """
+    ahora = datetime.now()
+    entrada = parse_hora(entrada_str)
+    expira = parse_hora(expira_str)
+
+    if ahora < entrada:
+        return "PRE-ALERTA", int((entrada - ahora).total_seconds())
+    elif entrada <= ahora < expira:
+        return "EN CURSO", int((expira - ahora).total_seconds())
+    else:
+        return "FINALIZADA", 0
+
+def duracion_min_por_conf(confianza: int) -> int:
+    """Métrica sugerida (ajústala si quieres)."""
+    if confianza >= 95:
+        return 3
+    elif confianza >= 90:
+        return 2
+    else:
+        return 1
+
+# ------------------------ Vistas Flask ------------------------
+
+HTML = r"""
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>📊 Panel de Señales IQ Option</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { background:#0b1526; color:#e9f0fb; font-family:Arial,Helvetica,sans-serif; }
+  h1 { margin:18px 0; font-weight:700; }
+  .wrap { width: 96%; margin: 0 auto; }
+  .subtitle { margin: 4px 0 14px 0; color:#9ec1ff; font-size:14px; }
+  table { width:100%; border-collapse:collapse; background:#0f223b; border:1px solid #284a7a; }
+  th, td { padding:10px; border-bottom:1px solid #1c365a; text-align:center; }
+  th { background:#0f3b5f; color:#bfe0ff; font-weight:700; }
+  .call { color:#19d27a; font-weight:700; }
+  .put  { color:#ff5c5c; font-weight:700; }
+  .chip { padding:2px 8px; border-radius:12px; font-size:12px; font-weight:700; display:inline-block;}
+  .pre   { background:#ffde59; color:#1a1a1a; }
+  .run   { background:#19d27a; color:#0b2a13; }
+  .done  { background:#6c7a89; color:#fff; }
+  .blink { animation: blink 1s linear infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+  .muted { color:#97b2d6; font-size:12px; }
+  .right { float:right; font-size:12px; color:#7fb0ff; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>📊 Panel de Señales IQ Option</h1>
+    <div class="subtitle">
+        Actualizado: <span id="ts">--:--:--</span>
+        <span class="right">🔄 Refrescando cada segundo</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Par</th>
+          <th>Tipo</th>
+          <th>Precio</th>
+          <th>Entrada</th>
+          <th>Expira</th>
+          <th>Confianza</th>
+          <th>Estrategia</th>
+          <th>Duración</th>
+          <th>Estado</th>
+          <th>⏱️ Contador</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="10" class="muted">Sin datos aún…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+async function cargar(){
+  try{
+    const res = await fetch('/api/senales');
+    const data = await res.json();
+    const tb = document.getElementById('tbody');
+    tb.innerHTML = '';
+    if(!data || data.length === 0){
+      tb.innerHTML = '<tr><td colspan="10" class="muted">Sin datos aún…</td></tr>';
+    } else {
+      for(const s of data){
+        const tr = document.createElement('tr');
+
+        const tipoClass = (s.tipo || '').toUpperCase() === 'CALL' ? 'call' : 'put';
+        const estado = (s.estado || '');
+        const chipClass = estado === 'PRE-ALERTA' ? 'chip pre blink'
+                         : estado === 'EN CURSO' ? 'chip run blink'
+                         : 'chip done';
+
+        tr.innerHTML = `
+          <td>${s.par || ''}</td>
+          <td class="${tipoClass}">${(s.tipo || '').toUpperCase()}</td>
+          <td>${s.precio ?? ''}</td>
+          <td>${s.entrada || ''}</td>
+          <td>${s.expira || ''}</td>
+          <td>${s.confianza != null ? s.confianza + '%' : ''}</td>
+          <td>${s.estrategia || ''}</td>
+          <td>${s.duracion_min != null ? s.duracion_min + ' min' : ''}</td>
+          <td><span class="${chipClass}">${estado}</span></td>
+          <td>${s.contador != null ? s.contador + ' s' : ''}</td>
+        `;
+        tb.appendChild(tr);
+      }
+    }
+    document.getElementById('ts').textContent = new Date().toLocaleTimeString();
+  }catch(e){
+    // silencioso
+  }
+}
+setInterval(cargar, 1000);
+cargar();
+</script>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+@app.route("/api/senales")
+def api_seniales():
+    # Lee señales crudas del JSON, calcula estado/contador/duración y devuelve
+    crudas = leer_senales()
+    enriquecidas = []
+    for s in crudas:
+        try:
+            estado, contador = estado_y_contador(s.get("entrada","00:00:00"), s.get("expira","00:00:00"))
+            conf = int(s.get("confianza", 0))
+            s_out = {
+                "par": s.get("par",""),
+                "tipo": s.get("tipo",""),
+                "precio": s.get("precio",""),
+                "entrada": s.get("entrada",""),
+                "expira": s.get("expira",""),
+                "confianza": conf,
+                "estrategia": s.get("estrategia",""),
+                "duracion_min": duracion_min_por_conf(conf),
+                "estado": estado,
+                "contador": max(0, contador)
+            }
+            enriquecidas.append(s_out)
+        except Exception:
+            continue
+    # Orden: primero EN CURSO, luego PRE-ALERTA, luego FINALIZADA
+    orden = {"EN CURSO":0, "PRE-ALERTA":1, "FINALIZADA":2}
+    enriquecidas.sort(key=lambda x: (orden.get(x["estado"], 9), x["expira"]))
+    return jsonify(enriquecidas)
+
+if __name__ == "__main__":
+    print("✅ Panel sirviendo en http://127.0.0.1:8765")
+    app.run(host="0.0.0.0", port=8765)}

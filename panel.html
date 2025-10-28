@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📊 Panel de Señales IQ Option</title>
+<style>
+    body {
+        background-color: #0d1117;
+        color: #fff;
+        font-family: 'Segoe UI', sans-serif;
+        text-align: center;
+        margin: 0;
+        padding: 0;
+    }
+    .barra-estado {
+        padding: 12px;
+        font-size: 18px;
+        font-weight: bold;
+        color: white;
+    }
+    .real { background-color: #009e0f; }
+    .otc { background-color: #f39c12; }
+    .pausa { background-color: #b22222; }
+    h1 { margin-top: 10px; }
+    button {
+        border: none;
+        color: white;
+        padding: 10px 18px;
+        border-radius: 6px;
+        font-size: 16px;
+        cursor: pointer;
+        margin-top: 10px;
+        font-weight: bold;
+        transition: 0.3s;
+    }
+    .activo { background-color: #009e0f; } /* verde */
+    .activo:hover { background-color: #00cc33; }
+    .pausado { background-color: #b22222; } /* rojo */
+    .pausado:hover { background-color: #ff3333; }
+    table {
+        width: 95%;
+        margin: 20px auto;
+        border-collapse: collapse;
+        background-color: #161b22;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    th, td {
+        padding: 10px;
+        border-bottom: 1px solid #30363d;
+    }
+    th { background-color: #21262d; }
+    tr:hover { background-color: #1f6feb; transition: 0.3s; }
+    .call { color: #00ff66; font-weight: bold; }
+    .put { color: #ff3333; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="barra" class="barra-estado">Cargando modo...</div>
+<h1>📡 Panel de Señales IQ Option</h1>
+
+<!-- Botón de control -->
+<button id="controlBoton" class="activo" onclick="alternarBot()">⏸️ Pausar Señales</button>
+
+<table id="tabla">
+    <thead>
+        <tr>
+            <th>🪙 Par</th>
+            <th>📈 Tipo</th>
+            <th>💰 Precio</th>
+            <th>⌛ Entrada</th>
+            <th>⏳ Expira</th>
+            <th>💪 Confianza</th>
+            <th>📊 Estrategia</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<script>
+let enPausa = false;
+
+function detectarModo() {
+    const hoy = new Date();
+    const dia = hoy.getDay();
+    const barra = document.getElementById("barra");
+
+    if (enPausa) {
+        barra.className = "barra-estado pausa";
+        barra.textContent = "🟥 Bot en pausa — sin nuevas señales";
+        return;
+    }
+
+    if (dia === 6 || dia === 0) {
+        barra.className = "barra-estado otc";
+        barra.textContent = "🟠 Modo OTC activo (mercado cerrado)";
+    } else {
+        barra.className = "barra-estado real";
+        barra.textContent = "🟢 Modo REAL activo (mercado abierto)";
+    }
+}
+
+async function cargarSenales() {
+    if (enPausa) return;
+    try {
+        const response = await fetch("signals.json?_=" + new Date().getTime());
+        const data = await response.json();
+        const tbody = document.querySelector("tbody");
+        tbody.innerHTML = "";
+
+        data.forEach(senal => {
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td>${senal.par}</td>
+                <td class="${senal.tipo === 'CALL' ? 'call' : 'put'}">
+                    ${senal.tipo === 'CALL' ? '🟢 Compra' : '🔴 Venta'}
+                </td>
+                <td>${senal.precio}</td>
+                <td>${senal.entrada}</td>
+                <td>${senal.expira}</td>
+                <td>${senal.confianza}%</td>
+                <td>${senal.estrategia}</td>
+            `;
+            tbody.appendChild(row);
+        });
+    } catch (error) {
+        console.error("Error cargando señales:", error);
+    }
+}
+
+function alternarBot() {
+    const boton = document.getElementById("controlBoton");
+    enPausa = !enPausa;
+
+    if (enPausa) {
+        boton.textContent = "▶️ Activar Señales";
+        boton.className = "pausado";
+    } else {
+        boton.textContent = "⏸️ Pausar Señales";
+        boton.className = "activo";
+    }
+    detectarModo();
+}
+
+detectarModo();
+setInterval(() => {
+    detectarModo();
+    cargarSenales();
+}, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "modo": "mixto",
+  "pares_otc": [
+    "EURUSD-OTC",
+    "GBPUSD-OTC",
+    "USDJPY-OTC",
+    "AUDUSD-OTC",
+    "EURJPY-OTC",
+    "USDCAD-OTC"
+  ],
+  "pares_real": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "AUDUSD",
+    "EURJPY",
+    "USDCAD"
+  ],
+  "max_senales_otc": 51,
+  "max_senales_real": 51,
+  "confianza_minima": 85
+}

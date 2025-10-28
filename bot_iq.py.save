@@ -1,0 +1,79 @@
+from iqoptionapi.stable_api import IQ_Option
+import time, json, threading, requests, random, datetime
+
+# ===== CONFIGURACIÓN DE CUENTA =====
+EMAIL = "jitraders1216@gmail.com"
+PASSWORD = "jo121014
+"
+
+# ===== DETECTAR AUTOMÁTICAMENTE SI ES FIN DE SEMANA =====
+hoy = datetime.datetime.today().weekday()
+modo_otc = hoy in [5, 6]  # Sábado o Domingo → OTC
+PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC"] if modo_otc else ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+
+# ===== CONEXIÓN A IQ OPTION =====
+print("🔌 Conectando a IQ Option...")
+I_want_money = IQ_Option(EMAIL, PASSWORD)
+I_want_money.connect()
+
+if I_want_money.check_connect():
+    tipo_cuenta = "OTC" if modo_otc else "REAL"
+    print(f"✅ Conectado correctamente a IQ Option ({tipo_cuenta})")
+else:
+    print("❌ Error al conectar con IQ Option. Revisa usuario o contraseña.")
+    exit()
+
+# ===== FUNCIÓN PARA ENVIAR SEÑAL AL PANEL =====
+def enviar_senal_a_panel(senal):
+    try:
+        requests.post("http://127.0.0.1:8765/api/signals", json=[senal])
+        print(f"📡 Señal enviada al panel: {senal['par']} | {senal['tipo']} | Confianza: {senal['confianza']}%")
+    except Exception as e:
+        print("⚠️ Error enviando señal al panel:", e)
+
+# ===== FUNCIÓN QUE GENERA SEÑALES SIMULADAS =====
+def generar_senal():
+    par = random.choice(PAIRS)
+    tipo = random.choice(["CALL", "PUT"])
+    confianza = random.randint(85, 99)
+    estrategias = [
+        "Rechazo de Zona Institucional",
+        "Cambio de Tendencia + Confirmación de Vela",
+        "Ruptura de Nivel + Volumen",
+        "Pullback + EMA20",
+        "Acción del Precio + Soporte/Resistencia"
+    ]
+    estrategia = random.choice(estrategias)
+    precio = round(random.uniform(1.08500, 1.12500), 5)
+    duracion = random.choice(["2", "3", "5"])
+
+    ahora = datetime.datetime.now()
+    entrada = ahora.strftime("%H:%M:%S")
+    expira = (ahora + datetime.timedelta(minutes=int(duracion))).strftime("%H:%M:%S")
+
+    senal = {
+        "par": par,
+        "tipo": tipo,
+        "precio": precio,
+        "entrada": entrada,
+        "expira": expira,
+        "confianza": confianza,
+        "estrategia": estrategia,
+        "duracion": duracion + " min",
+        "estado": "EN CURSO"
+    }
+
+    enviar_senal_a_panel(senal)
+
+# ===== HILO PRINCIPAL QUE ENVÍA SEÑALES =====
+def ciclo_senales():
+    while True:
+        generar_senal()
+        time.sleep(random.randint(40, 70))  # Cada 40 a 70 segundos
+
+# ===== INICIAR PROCESO =====
+print("🚀 Sistema de señales iniciado...")
+print(f"Modo actual: {'OTC' if modo_otc else 'REAL'}")
+print("Esperando oportunidades de entrada...\n")
+
+threading.Thread(target=ciclo_senales).start()

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>📊 Panel de Señales IQ Option</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b1526;
+    --card: #0f223b;
+    --line: #1b3457;
+    --text: #e9f0fb;
+    --muted:#8fb0de;
+    --green:#16c784;
+    --red:#ff5c5c;
+    --amber:#ffcc00;
+    --blue:#2f81f7;
+  }
+  body { background:var(--bg); color:var(--text); font-family: Inter, Arial, sans-serif; margin:0; }
+  .wrap { width: 96%; margin: 0 auto; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:18px 0; }
+  h1 { margin:0; font-size:22px; }
+  .right { display:flex; gap:14px; align-items:center; }
+
+  /* Switch moderno */
+  .switch {
+    position: relative; width: 130px; height: 38px; background:#20344f; border-radius: 999px;
+    border:1px solid var(--line); cursor:pointer; user-select:none; overflow:hidden;
+  }
+  .knob {
+    position:absolute; top:3px; left:3px; width:32px; height:32px; border-radius:50%;
+    background:#fff; transition: all .2s ease;
+  }
+  .label {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:14px; padding-left:20px; padding-right:20px;
+    color:#fff; transition: color .2s ease;
+  }
+  .switch.on { background:var(--green); }
+  .switch.off{ background:var(--red); }
+  .switch.on .knob { left:95px; }
+  .switch.off .knob{ left:3px; }
+  .time { color:var(--muted); font-size:12px; }
+
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); }
+  th, td { padding:10px; border-bottom:1px solid var(--line); text-align:center; }
+  th { background:#12335a; color:#bfe0ff; }
+  .call { color:var(--green); font-weight:700; }
+  .put  { color:var(--red); font-weight:700; }
+  .chip { padding:3px 9px; border-radius:12px; font-weight:700; font-size:12px; display:inline-block; }
+  .pre { background:var(--amber); color:#1a1a1a; }
+  .run { background:var(--green);  color:#072815; }
+  .done{ background:#667c99; color:#fff; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>📊 Panel de Señales IQ Option</h1>
+      <div class="right">
+        <div class="switch off" id="botSwitch" title="Activar/Desactivar bot">
+          <div class="knob"></div>
+          <div class="label" id="switchLabel">Bot Desactivado</div>
+        </div>
+        <div class="time">Actualizado: <span id="clock">--:--:--</span></div>
+      </div>
+    </header>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Par</th>
+          <th>Tipo</th>
+          <th>Precio</th>
+          <th>Entrada</th>
+          <th>Expira</th>
+          <th>Confianza</th>
+          <th>Estrategia</th>
+          <th>Duración</th>
+          <th>Estado</th>
+          <th>⏱ Contador</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="10" style="color:#8fb0de">Sin datos aún…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+function fmtSeg(s){ return (s>0? s+" s":"0 s"); }
+
+async function cargaEstado(){
+  try{
+    const res = await fetch('/api/estado');
+    const {activo} = await res.json();
+    const sw = document.getElementById('botSwitch');
+    const lbl = document.getElementById('switchLabel');
+    if (activo){
+      sw.classList.add('on'); sw.classList.remove('off');
+      lbl.textContent = 'Bot Activado';
+    } else {
+      sw.classList.add('off'); sw.classList.remove('on');
+      lbl.textContent = 'Bot Desactivado';
+    }
+  }catch(e){}
+}
+
+async function toggle(){
+  try{
+    const res = await fetch('/api/toggle', {method:'POST'});
+    await res.json();
+    cargaEstado();
+  }catch(e){}
+}
+
+async function cargarTabla(){
+  try{
+    const res = await fetch('/api/senales');
+    const data = await res.json();
+    const tb = document.getElementById('tbody');
+    tb.innerHTML = '';
+    if (!data || data.length===0){
+      tb.innerHTML = '<tr><td colspan="10" style="color:#8fb0de">Sin datos aún…</td></tr>';
+      return;
+    }
+    data.forEach(s=>{
+      const tr = document.createElement('tr');
+      const tipoCls = (s.tipo||"").toUpperCase()==='CALL' ? 'call':'put';
+      const chipCls = s.estado==='EN CURSO' ? 'chip run' : (s.estado==='PRE-ALERTA' ? 'chip pre':'chip done');
+      tr.innerHTML = `
+        <td>${s.par||''}</td>
+        <td class="${tipoCls}">${(s.tipo||'').toUpperCase()}</td>
+        <td>${s.precio??''}</td>
+        <td>${s.entrada||''}</td>
+        <td>${s.expira||''}</td>
+        <td>${s.confianza!=null? s.confianza+'%':''}</td>
+        <td>${s.estrategia||''}</td>
+        <td>${s.duracion_min!=null? s.duracion_min+' min':''}</td>
+        <td><span class="${chipCls}">${s.estado}</span></td>
+        <td>${fmtSeg(s.contador||0)}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }catch(e){}
+}
+
+document.getElementById('botSwitch').addEventListener('click', toggle);
+
+function tick(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+setInterval(tick, 1000);
+setInterval(cargarTabla, 1000);
+setInterval(cargaEstado, 2000);
+tick(); cargarTabla(); cargaEstado();
+</script>
+</body>
+</html>
