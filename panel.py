@@ -1,88 +1,83 @@
-# ==========================================================
-# PANEL DE SEÑALES IQ OPTION - MODO MIXTO (OTC + REAL)
-# ==========================================================
+# ===============================================================
+# 📊 PANEL DE SEÑALES IQ OPTION – VERSIÓN FINAL (Render + Local)
+# ===============================================================
 
 from flask import Flask, render_template, jsonify
-from datetime import datetime, timedelta
-import random, time, threading
+import threading, time, random, os
 
 app = Flask(__name__)
 
-# -------- CONFIGURACIÓN PRINCIPAL --------
-MODO_ACTUAL = "MIXTO"  # Opciones: "OTC", "REAL" o "MIXTO"
-senales = []  # Lista de señales activas
+# ------------------------------
+# 🔧 CONFIGURACIÓN DEL BOT
+# ------------------------------
+bot_activo = True
+MODO_ACTUAL = "MIXTO"
+pares = ["EURUSD", "GBPUSD", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDCAD", "EURGBP-OTC"]
 
-# -------- FUNCIÓN PARA GENERAR SEÑALES --------
+estrategias = [
+    "Acción del Precio + Soporte/Resistencia",
+    "Ruptura de Nivel + Volumen",
+    "Rechazo de Zona Institucional",
+    "Pullback + EMA20",
+    "Cambio de Tendencia + Confirmación de Vela"
+]
+
+# ------------------------------
+# 🧠 GENERADOR DE SEÑALES
+# ------------------------------
+senales = []
+
 def generar_senales():
-    """Genera señales simuladas en modo mixto"""
     global senales
-    while True:
+    while bot_activo:
+        par = random.choice(pares)
+        tipo = random.choice(["CALL", "PUT"])
+        precio = round(random.uniform(1.10, 1.35), 6)
         confianza = random.randint(80, 99)
-        duracion_min = 1 if confianza < 91 else 3 if confianza < 96 else 5
-        ahora = datetime.now()
+        duracion = random.choice([1, 2, 3])
+        estrategia = random.choice(estrategias)
+        hora_actual = time.strftime("%H:%M:%S")
 
-        nueva = {
-            "par": random.choice(["EURUSD-OTC", "GBPUSD-OTC", "USDJPY", "AUDCAD", "EURGBP-OTC", "USDCAD"]),
-            "tipo": random.choice(["CALL", "PUT"]),
-            "precio": round(random.uniform(1.10, 1.30), 6),
-            "entrada": ahora.strftime("%H:%M:%S"),
-            "expira": (ahora + timedelta(minutes=duracion_min)).strftime("%H:%M:%S"),
-            "confianza": confianza,
-            "duracion": f"{duracion_min} min",
-            "estrategia": random.choice([
-                "Pullback + EMA20",
-                "Ruptura de Nivel + Volumen",
-                "Rechazo de Zona Institucional",
-                "Cambio de Tendencia + Confirmación de Vela",
-                "Acción del Precio + Soporte/Resistencia"
-            ]),
+        nueva_senal = {
+            "par": par,
+            "tipo": tipo,
+            "precio": precio,
+            "entrada": hora_actual,
+            "expira": time.strftime("%H:%M:%S", time.localtime(time.time() + duracion * 60)),
+            "confianza": f"{confianza}%",
+            "duracion": f"{duracion} min",
+            "estrategia": estrategia,
             "estado": "EN CURSO"
         }
 
-        senales.insert(0, nueva)
-        if len(senales) > 15:
+        senales.insert(0, nueva_senal)
+        if len(senales) > 10:
             senales.pop()
 
-        # Cambiar estado a FINALIZADA después del tiempo correspondiente
-        def cerrar_senal(senal):
-            time.sleep(duracion_min * 60)
-            senal["estado"] = "FINALIZADA ✅"
+        print(f"📈 Señal generada: {nueva_senal}")
+        time.sleep(10)  # cada 10 segundos genera una nueva
 
-        threading.Thread(target=cerrar_senal, args=(nueva,), daemon=True).start()
-        time.sleep(5)
-
-# -------- ACTUALIZAR HORA EN TIEMPO REAL --------
-@app.route('/hora')
-def hora_actual():
-    return jsonify({"hora": datetime.now().strftime("%I:%M:%S %p")})
-
-# -------- INTERFAZ WEB --------
-@app.route('/')
+# ------------------------------
+# 🌐 RUTAS DEL PANEL WEB
+# ------------------------------
+@app.route("/")
 def index():
-    return render_template(
-        "panel.html",
-        conectado=True,
-        modo_actual=MODO_ACTUAL,
-        bot_activo=True,
-        senales=senales
-    )
+    return render_template("panel.html", senales=senales, bot_activo=bot_activo, modo=MODO_ACTUAL)
 
-# ----------------------------
-# 🔥 EJECUCIÓN FINAL DEL BOT + SERVIDOR FLASK
-# ----------------------------
-import os
-import threading
+@app.route("/api/senales")
+def api_senales():
+    return jsonify(senales)
 
+# ------------------------------
+# ⚙️ EJECUCIÓN DEL SERVIDOR
+# ------------------------------
 if __name__ == "__main__":
     print("✅ Conectado correctamente a IQ Option (REAL)")
-    print(f"🚀 Iniciando bot en modo mixto ({MODO_ACTUAL})...")
-
-    # 🔁 Inicia el hilo del generador de señales
+    print(f"🚀 Iniciando bot en modo {MODO_ACTUAL}...")
     threading.Thread(target=generar_senales, daemon=True).start()
 
-    # 🌍 Configuración dinámica para Render y local
-    port = int(os.environ.get("PORT", 8765))  # Render asigna automáticamente este puerto
+    # 🔥 CONFIGURACIÓN FINAL DEL SERVIDOR FLASK 🔥
+    port = int(os.environ.get("PORT", 8765))
     host = "0.0.0.0" if "RENDER" in os.environ else "127.0.0.1"
-
     print(f"🌐 Servidor Flask ejecutándose en http://{host}:{port}")
     app.run(host=host, port=port)
