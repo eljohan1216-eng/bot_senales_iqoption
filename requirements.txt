@@ -1,7 +1,3 @@
 flask
-iqoptionapi
-websocket-client
+gunicorn
 requests
-jsonschema
-numpy
-pandas
