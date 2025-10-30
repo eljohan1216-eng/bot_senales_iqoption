@@ -24,6 +24,7 @@ except Exception:
     TZ_CL = pytz.timezone("America/Santiago")
 
 from flask import Flask, render_template, jsonify
+from collections import deque
 
 # =======================
 #  CONFIG & ESTADO NUEVO
