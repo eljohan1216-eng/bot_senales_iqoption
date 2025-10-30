@@ -25,180 +25,182 @@ except Exception:
 
 from flask import Flask, render_template, jsonify
 
-# -----------------------------
-# CONFIGURACIÓN
-# -----------------------------
-MODO_ACTUAL = os.environ.get("MODO_ACTUAL", "MIXTO")  # "OTC", "REAL" o "MIXTO"
+# =======================
+#  CONFIG & ESTADO NUEVO
+# =======================
+CONF_MIN = 85                     # no emitir <85%
+COOL_DOWN_MIN = 6                 # no repetir/oponer dentro de esta ventana
+MAX_CACHE = 500                   # historial para evitar duplicados
+PREAVISO_1M = 30                  # segundos antes para señales de 1m
+PREAVISO_3M = 60                  # para 3m
+PREAVISO_5M = 90                  # para 5m
 
-# Si Render asigna puerto dinámico lo usamos; si no, local 8765
-PORT = int(os.environ.get("PORT", 8765))
-# Host: en Render debe ser 0.0.0.0; local puede ser 127.0.0.1
-HOST = "0.0.0.0" if "RENDER" in os.environ or os.environ.get("ON_RENDER") else "127.0.0.1"
-
-# Estructura de señales en memoria
-senales = []  # cada item: dict con par, tipo, precio, entrada, expira, confianza, duracion_min, estrategia, estado
-
-bot_activo = True
-app = Flask(__name__, template_folder="templates", static_folder="static")
-
-
-# -----------------------------
-# UTILIDADES
-# -----------------------------
-def ahora_cl():
-    """Devuelve datetime timezone-aware en Chile."""
-    # Si TZ_CL es pytz, se usa localize; si es zoneinfo, replace tzinfo
-    try:
-        return datetime.now(TZ_CL)
-    except Exception:
-        return pytz.utc.localize(datetime.utcnow()).astimezone(TZ_CL)  # pragma: no cover
-
-
-def fmt_hhmmss(dt: datetime) -> str:
-    return dt.strftime("%I:%M:%S %p")  # 12h con AM/PM como en tu panel
-
-
-def duracion_por_confianza(conf: int) -> int:
-    """Regla solicitada: 85–90 => 1, 90–95 => 3, 95–100 => 5 (minutos)."""
-    if conf < 90:
-        return 1
-    elif conf < 95:
-        return 3
-    else:
-        return 5
-
-
-# -----------------------------
-# GENERADOR DE SEÑALES (demostración)
-# NOTA: aquí puedes conectar tu lógica real/IQOption. Mantengo un mock estable.
-# -----------------------------
-PARES_REAL = ["EURUSD", "GBPUSD", "USDJPY"]
-PARES_OTC = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC"]
-ESTRATEGIAS = [
+# Prioridad de estrategias (la 1 gana si compiten)
+PRIORIDADES = [
+    "Rechazo de Zona Institucional",
     "Pullback + EMA20",
-    "Ruptura de Nivel + Volumen",
     "Acción del Precio + Soporte/Resistencia",
-    "Cambio de Tendencia + Confirmación de Vela",
-    "Rechazo de Zona Institucional"
+    "Ruptura de Nivel + Volumen",
+    "Cambio de Tendencia + Confirmación de Vela"
 ]
 
-def generar_senales():
-    while bot_activo:
-        try:
-            now = ahora_cl()
-            # Decide universo
-            universo = []
-            if MODO_ACTUAL in ("REAL", "MIXTO"):
-                universo += PARES_REAL
-            if MODO_ACTUAL in ("OTC", "MIXTO"):
-                universo += PARES_OTC
-            if not universo:
-                universo = PARES_OTC
+# Memorias para control
+senales_emitidas = deque(maxlen=MAX_CACHE)           # hashes de señales
+bloqueo_por_par = {}                                 # { 'EURUSD': {'sentido': 'CALL/PUT', 'expira': datetime } }
 
-            par = random.choice(universo)
-            tipo = random.choice(["CALL", "PUT"])
-            precio = round(random.uniform(1.05, 1.35), 6)
-            confianza = random.randint(80, 99)
-            dur_min = duracion_por_confianza(max(85, confianza))  # aseguramos >=85
-            entrada = now + timedelta(seconds=random.randint(30, 90))
-            expira = entrada + timedelta(minutes=dur_min)
-            estrategia = random.choice(ESTRATEGIAS)
+# =========
+# UTILIDAD
+# =========
+def _hash_senal(par, tipo, entrada_dt, expira_dt, dur_min, estrategia):
+    return f"{par}|{tipo}|{entrada_dt:%Y%m%d%H%M%S}|{expira_dt:%Y%m%d%H%M%S}|{dur_min}|{estrategia}"
 
-            senales.append({
-                "par": par,
-                "tipo": tipo,
-                "precio": precio,
-                "entrada": entrada.isoformat(),
-                "expira": expira.isoformat(),
-                "confianza": confianza,
-                "duracion_min": dur_min,
-                "estrategia": estrategia,
-                "estado": "EN CURSO"
-            })
+def _to_local_now():
+    # usa la hora del sistema donde corre el bot (Render o tu Mac)
+    return datetime.now()
 
-            # Mantén la lista razonable
-            if len(senales) > 120:
-                del senales[:40]
+def _proximo_open_de_vela():
+    """Devuelve el comienzo de la próxima vela M1 (segundos=0)."""
+    now = _to_local_now()
+    base = now.replace(second=0, microsecond=0)
+    return base + timedelta(minutes=1)
 
-            # Actualiza estados (Finalizada si ya pasó expira)
-            _actualizar_estados()
+def _preaviso_por_duracion(dur_min):
+    if dur_min <= 1:
+        return PREAVISO_1M
+    elif dur_min == 3:
+        return PREAVISO_3M
+    else:
+        return PREAVISO_5M
 
-        except Exception:
-            pass
+# ============================
+#  CALIBRADOR DE CONFIANZA
+# ============================
+def calibrar_confianza(raw_conf, confluencias):
+    """
+    raw_conf: 0-100 que calcule tu lógica actual.
+    confluencias: set/list con etiquetas de señales detectadas (ej: ['ema20','zona','volumen','tendencia'])
+    Reglas: reducimos “99% falsos” y hacemos 85-95% más honestos.
+    """
+    conf = max(0, min(100, int(raw_conf)))
 
-        # Ritmo de generación
-        import time
-        time.sleep(3)
+    # Bono por confluencia real
+    bonus = 0
+    if "tendencia" in confluencias: bonus += 3
+    if "ema20" in confluencias: bonus += 3
+    if "zona" in confluencias: bonus += 4
+    if "volumen" in confluencias: bonus += 2
+    if "soporte_resistencia" in confluencias: bonus += 2
 
+    conf = min(100, conf + bonus)
 
-def _actualizar_estados():
-    """Marca 'FINALIZADA' si ya pasó expira."""
-    now = ahora_cl()
-    for s in senales:
-        try:
-            exp = datetime.fromisoformat(s["expira"])
-            # si exp viene naive, fozamos tz CL
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=TZ_CL)
-            if now >= exp:
-                s["estado"] = "FINALIZADA"
-            else:
-                s["estado"] = "EN CURSO"
-        except Exception:
-            s["estado"] = "EN CURSO"
+    # Penalizaciones: si NO hay zona NI SR, baja el techo (evita 99% “vacíos”)
+    if "zona" not in confluencias and "soporte_resistencia" not in confluencias:
+        conf = min(conf, 93)
 
+    # Si no hay tendencia alineada con EMA20, limita fuerte
+    if "tendencia" not in confluencias or "ema20" not in confluencias:
+        conf = min(conf, 91)
 
-# -----------------------------
-# RUTAS
-# -----------------------------
-@app.route("/")
-def index():
-    return render_template("panel.html")
+    # Normaliza rango útil final
+    if conf >= 98:
+        conf = 95  # reserva 98-100 solo si algún día agregas validaciones premium
+    conf = max(conf, 80)  # evita “79” por redondeos si pasaron filtros
 
+    return conf
 
-@app.route("/api/status")
-def api_status():
-    return jsonify({
-        "hora_local": fmt_hhmmss(ahora_cl()),
-        "modo": MODO_ACTUAL,
-        "bot_activo": bot_activo
-    })
+# ==========================================
+#  RESOLUCIÓN DE CONFLICTOS & PRIORIDADES
+# ==========================================
+def elegir_mejor_estrategia(candidatas):
+    """
+    candidatas: lista de dicts con:
+      {'par','tipo','duracion_min','estrategia','conf','confluencias', 'precio_actual'}
+    Devuelve la mejor según PRIORIDADES y confianza.
+    """
+    if not candidatas:
+        return None
+    # Ordena por (prioridad, confianza desc)
+    def _key(c):
+        prio = PRIORIDADES.index(c['estrategia']) if c['estrategia'] in PRIORIDADES else 999
+        return (prio, -c['conf'])
+    candidatas_ordenadas = sorted(candidatas, key=_key)
+    return candidatas_ordenadas[0]
 
+def ventana_ocupa(bloqueo, ahora):
+    """True si hay bloqueo vigente (expira en el futuro)."""
+    return bloqueo and bloqueo.get('expira') and bloqueo['expira'] > ahora
 
-@app.route("/api/signals", methods=["GET"])
-def api_signals():
-    _actualizar_estados()
-    # Formateamos campos para la tabla
-    datos = []
-    for s in senales:
-        try:
-            ent = datetime.fromisoformat(s["entrada"])
-            exp = datetime.fromisoformat(s["expira"])
-            if ent.tzinfo is None: ent = ent.replace(tzinfo=TZ_CL)
-            if exp.tzinfo is None: exp = exp.replace(tzinfo=TZ_CL)
-            datos.append({
-                "par": s["par"],
-                "tipo": s["tipo"],
-                "precio": s["precio"],
-                "entrada": ent.strftime("%H:%M:%S"),
-                "expira": exp.strftime("%H:%M:%S"),
-                "confianza": f'{s["confianza"]}%',
-                "duracion": f'{s["duracion_min"]} min',
-                "estrategia": s["estrategia"],
-                "estado": s["estado"]
-            })
-        except Exception:
-            pass
-    return jsonify({"signals": datos})
+# ==================================
+#  EMISIÓN + PREAVISO DE LA SEÑAL
+# ==================================
+def emitir_senal_segura(par, tipo, duracion_min, estrategia, conf, precio_actual):
+    """
+    - Evita duplicados y opuestos solapados
+    - Publica PENDIENTE con preaviso (30/60/90s según duración)
+    - Actualiza bloqueo_por_par para impedir contradicción en ventana activa
+    """
+    ahora = _to_local_now()
+    if conf < CONF_MIN:
+        return None
 
+    # Chequeo de bloqueo/opuesto
+    bloqueo = bloqueo_por_par.get(par)
+    if ventana_ocupa(bloqueo, ahora):
+        # Si intenta ir en contra del sentido bloqueado, la descartamos
+        if bloqueo['sentido'] != tipo:
+            return None
 
-# -----------------------------
-# EJECUCIÓN
-# -----------------------------
-if __name__ == "__main__":
-    print("✅ Conectado correctamente a IQ Option (REAL)")  # tu conexión real puede loguearse aquí
-    print(f"🚀 Iniciando bot en modo: {MODO_ACTUAL}")
+    # Tiempos
+    open_siguiente = _proximo_open_de_vela()
+    preaviso = _preaviso_por_duracion(duracion_min)
+    segundos_restantes = (open_siguiente - ahora).total_seconds()
 
-    threading.Thread(target=generar_senales, daemon=True).start()
-    print(f"🌐 Servidor Flask ejecutándose en http://{HOST}:{PORT}")
-    app.run(host=HOST, port=PORT)
+    # Si el preaviso es mayor al tiempo restante, la publicamos ya como PENDIENTE igual
+    # y que el usuario alcance la siguiente vela
+    if segundos_restantes < preaviso:
+        # no hacemos nada extra; simplemente saldrá ya como PENDIENTE
+        pass
+
+    entrada_dt = open_siguiente
+    expira_dt = entrada_dt + timedelta(minutes=duracion_min)
+
+    # Evita duplicado exacto
+    h = _hash_senal(par, tipo, entrada_dt, expira_dt, duracion_min, estrategia)
+    if h in senales_emitidas:
+        return None
+
+    # Registrar bloqueo del par por toda la ventana (entrada→expira + cooldown)
+    bloqueo_por_par[par] = {
+        'sentido': tipo,
+        'expira': expira_dt + timedelta(minutes=COOL_DOWN_MIN)
+    }
+
+    # Calcular confianza calibrada
+    # (si ya llega calibrada, pasa igual)
+    # conf = calibrar_confianza(conf, confluencias)  # <- si aún no la calibraste antes
+
+    # Publicar al panel con estado "PENDIENTE"
+    nueva = {
+        'par': par,
+        'tipo': tipo,                           # 'CALL' verde / 'PUT' rojo (ya lo tienes)
+        'precio': precio_actual,
+        'entrada': entrada_dt.strftime("%H:%M:%S"),
+        'expira': expira_dt.strftime("%H:%M:%S"),
+        'confianza': f"{conf}%",
+        'duracion': f"{duracion_min} min",
+        'estrategia': estrategia,
+        'estado': "PENDIENTE"                   # luego tu bucle la pasa a EN CURSO -> FINALIZADA
+    }
+
+    # TODO: integra este dict a tu storage (signals.json o tu lista global) y socket/panel
+    # Ejemplo si ya tienes una lista global `senales`:
+    try:
+        senales.insert(0, nueva)                # al inicio de la tabla
+        if len(senales) > 50:
+            senales.pop()
+    except Exception:
+        pass
+
+    # Guarda hash para no duplicar
+    senales_emitidas.append(h)
+    return nueva
